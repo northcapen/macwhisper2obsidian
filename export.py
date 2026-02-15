@@ -2,15 +2,33 @@
 """Export MacWhisper transcription sessions to Obsidian markdown notes."""
 
 import json
-import os
 import re
 import sqlite3
 import sys
 from pathlib import Path
 
-DB_PATH = Path.home() / "Library/Application Support/MacWhisper/Database/main.sqlite"
-OUTPUT_DIR = Path("./output")
-STATE_FILE = Path(".export_state.json")
+SCRIPT_DIR = Path(__file__).resolve().parent
+CONFIG_FILE = SCRIPT_DIR / "config.json"
+
+
+def load_config():
+    """Load configuration from config.json next to the script."""
+    if not CONFIG_FILE.exists():
+        print(
+            f"Error: config file not found at {CONFIG_FILE}\n"
+            f"Copy config.example.json to config.json and edit your paths.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+
+    db_path = Path(cfg["db_path"]).expanduser()
+    output_dir = Path(cfg.get("output_dir", "./output"))
+    state_file = Path(cfg.get("state_file", ".export_state.json"))
+
+    return db_path, output_dir, state_file
 
 
 def format_duration(seconds):
@@ -73,17 +91,17 @@ def render_note(session):
     return "\n".join(lines)
 
 
-def load_state():
+def load_state(state_file):
     """Load the incremental export state from disk."""
-    if STATE_FILE.exists():
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
+    if state_file.exists():
+        with open(state_file, "r", encoding="utf-8") as f:
             return json.load(f).get("exported", {})
     return {}
 
 
-def save_state(state):
+def save_state(state, state_file):
     """Persist the export state to disk."""
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
+    with open(state_file, "w", encoding="utf-8") as f:
         json.dump({"exported": state}, f, ensure_ascii=False, indent=2)
         f.write("\n")
 
@@ -134,14 +152,16 @@ def export_session(session, output_dir, used_filenames):
 
 
 def main():
-    if not DB_PATH.exists():
-        print(f"Error: database not found at {DB_PATH}", file=sys.stderr)
+    db_path, output_dir, state_file = load_config()
+
+    if not db_path.exists():
+        print(f"Error: database not found at {db_path}", file=sys.stderr)
         sys.exit(1)
 
-    conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        state = load_state()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        state = load_state(state_file)
         sessions = get_sessions(conn)
 
         new_count = 0
@@ -169,17 +189,17 @@ def main():
 
             if prev_date is None:
                 # New session
-                fname = export_session(session, OUTPUT_DIR, used_filenames)
+                fname = export_session(session, output_dir, used_filenames)
                 new_state[uuid_hex] = {"dateUpdated": date_updated, "filename": fname}
                 new_count += 1
             elif prev_date != date_updated:
                 # Updated session — remove old file if title changed
                 if prev_filename:
-                    old_path = OUTPUT_DIR / prev_filename
+                    old_path = output_dir / prev_filename
                     if old_path.exists():
                         old_path.unlink()
 
-                fname = export_session(session, OUTPUT_DIR, used_filenames)
+                fname = export_session(session, output_dir, used_filenames)
                 new_state[uuid_hex] = {"dateUpdated": date_updated, "filename": fname}
                 updated_count += 1
             else:
@@ -188,7 +208,7 @@ def main():
                     used_filenames.add(prev_filename)
                 skipped_count += 1
 
-        save_state(new_state)
+        save_state(new_state, state_file)
 
         print(
             f"Done: {new_count} new, {updated_count} updated, "

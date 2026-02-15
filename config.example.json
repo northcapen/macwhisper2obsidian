@@ -1,0 +1,5 @@
+{
+  "db_path": "~/Library/Application Support/MacWhisper/Database/main.sqlite",
+  "output_dir": "./output",
+  "state_file": ".export_state.json"
+}
